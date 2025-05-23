@@ -108,7 +108,7 @@ def train():
 
             #Train step.
             train_infos = agent.train()
-            if LOGGING:
+            if LOGGING and "loss" in train_infos.keys():
                 summary.add_scalar("train/loss", train_infos["loss"], total_states)
 
             #Update target model.
