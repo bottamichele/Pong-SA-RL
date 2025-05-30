@@ -47,7 +47,6 @@ def train():
 
     #Create the agent.
     model = DuelingDQN(env.observation_space.shape[0], env.action_space.n, 256, 2, 1, 1)
-    model.load_state_dict(tc.load("./models/model.pth"))
     agent = DQNAgent(model,
                      {"type": "uniform_memory", "mem_size": MEMORY_SIZE, "obs_size": env.observation_space.shape[0]},
                      UPDATE_TARGET_STEP,

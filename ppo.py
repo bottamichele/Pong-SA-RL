@@ -195,5 +195,5 @@ def test(model_name, n_episodes):
 # ========================================
 
 if __name__ == "__main__":
-    train()
-    # test("ppo.pth", 100)
+    # train()
+    test("ppo.pth", 100)
