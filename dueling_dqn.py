@@ -5,8 +5,7 @@ import datetime
 import pong_gym
 import os
 
-from gymnasium.wrappers import RecordEpisodeStatistics, RecordVideo, FrameStackObservation, FlattenObservation
-
+from gymnasium.wrappers import RecordEpisodeStatistics
 from pong_gym.wrappers import NormalizeObservationPong, PointReward
 
 from dqn_algorithms.nn import DuelingDQN
@@ -15,28 +14,20 @@ from dqn_algorithms.policy import greedy_policy
 
 from collections import deque
 
-from torch.utils.tensorboard import SummaryWriter
-
-from utils import FrameSkip
-
 # ========================================
 # ============ HYPERPARAMETERS ===========
 # ========================================
 
 TARGET_TOTAL_STEPS = 3000000
-FRAME_SKIP = 1
-FRAME_STACK = 1
 MEMORY_SIZE = 500000
-UPDATE_TARGET_STEP = 10000
+UPDATE_TARGET_STEP = 5000
 GAMMA = 0.99
 LEARNING_RATE = 10**-4
 BATCH_SIZE = 64
 EPSILON_INIT = 1.0
 EPSILON_END = 0.01
-EPSILON_DECAY = 1.98 * 10**-6
-DEVICE = tc.device("cuda")
-RECORD_VIDEO = True
-LOGGING = True
+EPSILON_DECAY = 3.96 * 10**-6
+DEVICE = tc.device("cpu")
 USE_POINT_WRAPPER = False
 
 # ========================================
@@ -48,25 +39,17 @@ def train():
     training_model_path = os.path.join(training_path, "models")
 
     #Create the enviroment.
-    if RECORD_VIDEO:
-        env = gym.make("pong_gym/Pong-v0", render_mode="rgb_array")
-    else:
-        env = gym.make("pong_gym/Pong-v0")
+    env = gym.make("pong_gym/Pong-v0")
     env = NormalizeObservationPong(env)
     if USE_POINT_WRAPPER:
         env = PointReward(env)
-    if FRAME_SKIP > 1:
-        env = FrameSkip(env, skip=FRAME_SKIP)
-    if FRAME_STACK > 1:
-        env = FrameStackObservation(env, FRAME_STACK, padding_type="zero")
-        env = FlattenObservation(env)
-    if RECORD_VIDEO:
-        env = RecordVideo(env, os.path.join(training_path, "video"), episode_trigger=lambda e:e % 25 == 0, name_prefix="pong")
     env = RecordEpisodeStatistics(env, buffer_length=1)
 
     #Create the agent.
-    agent = DQNAgent(DuelingDQN(env.observation_space.shape[0], env.action_space.n, 128, 1, 1, 1),
-                     {"type": "proportional_prioritized_memory", "mem_size": MEMORY_SIZE, "obs_size": env.observation_space.shape[0]},
+    model = DuelingDQN(env.observation_space.shape[0], env.action_space.n, 256, 2, 1, 1)
+    model.load_state_dict(tc.load("./models/model.pth"))
+    agent = DQNAgent(model,
+                     {"type": "uniform_memory", "mem_size": MEMORY_SIZE, "obs_size": env.observation_space.shape[0]},
                      UPDATE_TARGET_STEP,
                      BATCH_SIZE,
                      LEARNING_RATE,
@@ -76,15 +59,11 @@ def train():
                      EPSILON_DECAY,
                      DEVICE)
 
-    #Tensorboard logger.
-    if LOGGING:
-        summary = SummaryWriter(os.path.join(training_path, "log"))
-
     #Training phase.
     total_states = 0
     episode = 1
-    beta_decay = (1.0 - agent.memory.beta) / TARGET_TOTAL_STEPS
     scores = deque(maxlen=100)
+    tot_rewards = deque(maxlen=100)
     ep_length = deque(maxlen=100)
 
     os.makedirs(training_model_path)
@@ -107,60 +86,45 @@ def train():
             agent.remember(tc.Tensor(obs).to(DEVICE), action, reward, tc.Tensor(next_obs).to(DEVICE), episode_done)
 
             #Train step.
-            train_infos = agent.train()
-            if LOGGING and "loss" in train_infos.keys():
-                summary.add_scalar("train/loss", train_infos["loss"], total_states)
+            agent.train()
 
             #Update target model.
             if total_states % agent.update_target_step == 0:
-                agent.update_target_model
+                agent.update_target_model()
 
             #Next observation.
             obs = next_obs
             total_states += 1
-            agent.memory.beta += beta_decay
 
             #Save current policy.
             if total_states % 200000 == 0:
                 tc.save(agent.model.state_dict(), os.path.join(training_model_path, f"model_{total_states}.pth"))
         
-        scores.append(infos["episode"]["r"])
+        tot_rewards.append(infos["episode"]["r"])
         ep_length.append(infos["episode"]["l"])
-
-        if LOGGING:
-            if len(scores) > 0:
-                summary.add_scalar("episode/avg_score", float(np.mean(scores)), total_states)
-            if len(ep_length) > 0:
-                summary.add_scalar("episode/avg_length", float(np.mean(ep_length)), total_states)
+        scores.append(infos["agent_score"] - infos["bot_score"])
         
         #Print episode info.
-        print("- Episode {:>3d}: score = {:.1f}; avg. score = {:.2f}; touch = {:>2d}; states = {:>3d}; total state = {:>6d}; epsilon = {:.2f}".format(episode, scores[-1], np.mean(scores), infos["ball_touched"], ep_length[-1], total_states, agent.epsilon))
+        print("- Episode {:>3d}: score = {:2d} - {:2d}; r = {:.1f}; avg. r = {:.2f}; touch = {:>2d}; states = {:>3d}; total state = {:>6d}; epsilon = {:.2f}".format(episode, infos["agent_score"], infos["bot_score"], tot_rewards[-1], np.mean(tot_rewards), infos["ball_touched"], ep_length[-1], total_states, agent.epsilon))
         
         #Next episode.
         episode += 1
 
     env.close()
-    if LOGGING:
-        summary.close() 
     agent.save_model(training_model_path)
 
 # ========================================
 # ================= TEST =================
 # ========================================
 
-def test(model_name, n_episodes, frame_skip=1, frame_stack=1):
+def test(model_name, n_episodes):
     #Create the enviroment.
     env = gym.make("pong_gym/Pong-v0", render_mode="human")
     env = NormalizeObservationPong(env)
-    if frame_skip > 1:
-        env = FrameSkip(env, skip=frame_skip)
-    if frame_stack > 1:
-        env = FrameStackObservation(env, stack_size=frame_stack, padding_type="zero")
-        env = FlattenObservation(env)
     env = RecordEpisodeStatistics(env, buffer_length=1)
 
     #Load the model.
-    model = DuelingDQN(env.observation_space.shape[0], env.action_space.n, 128, 1, 1, 1).to("cpu")
+    model = DuelingDQN(env.observation_space.shape[0], env.action_space.n, 256, 2, 1, 1).to("cpu")
     model.load_state_dict(tc.load(os.path.join("./models/", model_name)))
 
     #Test phase.
@@ -179,7 +143,7 @@ def test(model_name, n_episodes, frame_skip=1, frame_stack=1):
             #Next observation.
             obs = next_obs
 
-        print("- Episode {:>3d}: score = {}; frames = {}".format(episode, info["episode"]["r"], info["episode"]["l"]))
+        print("- Episode {:>3d}: score = {:2d} - {:2d}; r = {:.1f}; states = {:>2d}".format(episode, info["agent_score"], info["bot_score"], info["episode"]["r"], info["episode"]["l"]))
 
     env.close()
 
@@ -188,4 +152,5 @@ def test(model_name, n_episodes, frame_skip=1, frame_stack=1):
 # ========================================
 
 if __name__ == "__main__":
-    train()
+    # train()
+    test("dueling_dqn.pth", 100)

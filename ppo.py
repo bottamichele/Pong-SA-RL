@@ -6,7 +6,7 @@ import pong_gym
 import os
 
 from gymnasium.vector import SyncVectorEnv
-from gymnasium.wrappers import RecordEpisodeStatistics, RecordVideo
+from gymnasium.wrappers import RecordEpisodeStatistics
 from gymnasium.wrappers.vector import RecordEpisodeStatistics as RecordEpisodeStatisticsVec
 
 from pong_gym.wrappers import NormalizeObservationPong, PointReward
@@ -35,7 +35,6 @@ CLIP_RANGE = 0.2
 VALUE_COEFFICIENT = 0.5
 ENTROPY_COEFFICIENT = 0.0
 DEVICE = tc.device("cpu")
-RECORD_VIDEO = False
 LOGGING = True
 USE_POINT_WRAPPER = False
 
@@ -43,22 +42,12 @@ USE_POINT_WRAPPER = False
 # ================= TRAIN ================
 # ========================================
 
-def create_env(training_path, idx_env):
+def create_env():
     def aux():
-        #Create the enviroment.
-        if RECORD_VIDEO and idx_env == 0:
-            env = gym.make("pong_gym/Pong-v0", render_mode="rgb_array")
-        else:
-            env = gym.make("pong_gym/Pong-v0")
-
-        #Pong's wrappers.
+        env = gym.make("pong_gym/Pong-v0")
         env = NormalizeObservationPong(env)
         if USE_POINT_WRAPPER:
             env = PointReward(env)
-
-        #Record video wrapper.
-        if RECORD_VIDEO and idx_env == 0:
-            env = RecordVideo(env, os.path.join(training_path, "video"), episode_trigger=lambda e:e % 50 == 0, name_prefix="pong")
 
         return env
     
@@ -69,7 +58,7 @@ def train():
     training_model_path = os.path.join(training_path, "models")
 
     #Create the vectorized enviroment.
-    envs = SyncVectorEnv([create_env(training_path, idx) for idx in range(N_ENVS)])
+    envs = SyncVectorEnv([create_env() for _ in range(N_ENVS)])
     envs = RecordEpisodeStatisticsVec(envs, buffer_length=1)
 
     #Create the agent.
@@ -206,5 +195,5 @@ def test(model_name, n_episodes):
 # ========================================
 
 if __name__ == "__main__":
-    # train()
-    test("ppo.pth")
+    train()
+    # test("ppo.pth", 100)
